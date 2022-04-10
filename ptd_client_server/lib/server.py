@@ -269,17 +269,19 @@ class ServerConfig:
             fallback=f"0.0.0.0 {common.DEFAULT_PORT}",
         )
 
+        self.analyzer_count: int = get("ptd", "analyzerCount", parse=int, fallback="1")
+
         self.ptd_channel: Optional[List[int]] = get(
-            "ptd", "channel", parse=parse_channel, fallback=None
+            "analyzer1", "channel", parse=parse_channel, fallback=None
         )
-        self.ptd_device_type: int = get("ptd", "deviceType", parse=int)
-        ptd_interface_flag: str = get("ptd", "interfaceFlag")
-        ptd_device_port: str = get("ptd", "devicePort")
-        ptd_board_num: Optional[int] = get("ptd", "gpibBoard", parse=int, fallback=None)
+        self.ptd_device_type: int = get("analyzer1", "deviceType", parse=int)
+        ptd_interface_flag: str = get("analyzer1", "interfaceFlag")
+        ptd_device_port: str = get("analyzer1", "devicePort")
+        ptd_board_num: Optional[int] = get("analyzer1", "gpibBoard", parse=int, fallback=None)
         # TODO: validate ptd_interface_flag?
         # TODO: validate ptd_device_type?
         self.ptd_logfile: str = os.path.join(self.tmp_dir.name, "ptd_logfile.txt")
-        self.ptd_port: int = get("ptd", "networkPort", parse=int, fallback="8888")
+        self.ptd_port: int = get("analyzer1", "networkPort", parse=int, fallback="8888")
         self.ptd_command: List[str] = [
             get("ptd", "ptd"),
             "-l",
@@ -304,6 +306,43 @@ class ServerConfig:
             "device_port": ptd_device_port,
             "channel": self.ptd_channel,
         }
+
+        if self.analyzer_count > 1:
+            self.ptd_channel2: Optional[List[int]] = get(
+                "analyzer2", "channel", parse=parse_channel, fallback=None
+            )
+            self.ptd_device_type2: int = get("analyzer2", "deviceType", parse=int)
+            ptd_interface_flag2: str = get("analyzer2", "interfaceFlag")
+            ptd_device_port2: str = get("analyzer2", "devicePort")
+            ptd_board_num2: Optional[int] = get("analyzer2", "gpibBoard", parse=int, fallback=None)
+            # TODO: validate ptd_interface_flag?
+            # TODO: validate ptd_device_type?
+            self.ptd_logfile2: str = os.path.join(self.tmp_dir.name, "ptd_logfile2.txt")
+            self.ptd_port2: int = get("analyzer2", "networkPort", parse=int, fallback="8888")
+            self.ptd_command2: List[str] = [
+                get("ptd", "ptd"),
+                "-l",
+                self.ptd_logfile2,
+                "-p",
+                str(self.ptd_port2),
+                *([] if ptd_board_num2 is None else ["-b", str(ptd_board_num2)]),
+                *(
+                    []
+                    if self.ptd_channel2 is None
+                    else ["-c", ",".join(str(x) for x in self.ptd_channel2)]
+                ),
+                *([] if ptd_interface_flag2 == "" else [ptd_interface_flag2]),
+                str(self.ptd_device_type2),
+                ptd_device_port2,
+            ]
+
+            self.ptd_summary2: Dict[str, Any] = {
+                "command": self.ptd_command2,
+                "device_type": self.ptd_device_type2,
+                "interface_flag": ptd_interface_flag2,
+                "device_port": ptd_device_port2,
+                "channel": self.ptd_channel2,
+            }
 
         for section, used_items in used.items():
             unused_options = conf[section].keys() - set((i.lower() for i in used_items))
@@ -353,11 +392,12 @@ class ServerConfig:
 
 
 class Ptd:
-    def __init__(self, command: List[str], port: int, log_dir_path: str) -> None:
+    def __init__(self, command: List[str], port: int, log_dir_path: str, analyzer: int) -> None:
         self._process: Optional[subprocess.Popen[Any]] = None
         self._socket: Optional[socket.socket] = None
         self._proto: Optional[common.Proto] = None
         self._command = command
+        self._analyzer = analyzer
         self._port = port
         self._init_Amps: Optional[str] = None
         self._init_Volts: Optional[str] = None
@@ -377,8 +417,8 @@ class Ptd:
         if self._process is not None:
             return
         if tcp_port_is_occupied(self._port):
-            raise RuntimeError(f"The PTDaemon port {self._port} is already occupied")
-        logging.info(f"Running PTDaemon: {self._command}")
+            raise RuntimeError(f"[{self._analyzer}] The PTDaemon port {self._port} is already occupied")
+        logging.info(f"[{self._analyzer}] Running PTDaemon: {self._command}")
 
         self._tee = Tee(os.path.join(self._log_dir_path, "ptd_logs.txt"))
         env = os.environ
@@ -414,7 +454,7 @@ class Ptd:
         s = None
         while s is None and retries > 0:
             if self._process is not None and self._process.poll() is not None:
-                raise RuntimeError("PTDaemon unexpectedly terminated")
+                raise RuntimeError(f"[{self._analyzer}] PTDaemon unexpectedly terminated")
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 s.connect(("127.0.0.1", self._port))
@@ -426,16 +466,16 @@ class Ptd:
                 retries -= 1
         if s is None:
             self.terminate()
-            raise RuntimeError("Could not connect to PTDaemon")
+            raise RuntimeError(f"[{self._analyzer}] Could not connect to PTDaemon")
         self._socket = s
         self._proto = common.Proto(s)
 
         if self.cmd("Hello") != "Hello, PTDaemon here!":
-            raise RuntimeError("This is not PTDaemon")
+            raise RuntimeError(f"[{self._analyzer}] This is not PTDaemon")
 
         self.cmd("Identify")  # reply traced in logs
 
-        logging.info("Connected to PTDaemon")
+        logging.info(f"[{self._analyzer}] Connected to PTDaemon")
 
         self._get_initial_range()
 
@@ -448,7 +488,7 @@ class Ptd:
             self.cmd(f"SR,V,{self._init_Volts}")
             self.cmd(f"SR,A,{self._init_Amps}")
             logging.info(
-                f"Set initial values for Amps {self._init_Amps} and Volts {self._init_Volts}"
+                f"[{self._analyzer}] Set initial values for Amps {self._init_Amps} and Volts {self._init_Volts}"
             )
             self._proto = None
 
@@ -457,7 +497,7 @@ class Ptd:
             self._socket = None
 
         if self._process is not None:
-            logging.info("Stopping ptd...")
+            logging.info(f"[{self._analyzer}] Stopping ptd...")
             self._process.terminate()
             try:
                 self._process.wait(timeout=10)
@@ -472,7 +512,7 @@ class Ptd:
 
     def _force_terminate(self) -> None:
         if self._process is not None:
-            logging.info("Force stopping ptd...")
+            logging.info(f"[{self._analyzer}] Force stopping ptd...")
             self._process.kill()
             self._process.wait()
         self._process = None
@@ -485,13 +525,13 @@ class Ptd:
         if self._proto is None:
             return None
         if self._process is None or self._process.poll() is not None:
-            exit_with_error_msg("PTDaemon unexpectedly terminated")
-        logging.info(f"Sending to ptd: {cmd!r}")
+            exit_with_error_msg(f"[{self._analyzer}] PTDaemon unexpectedly terminated")
+        logging.info(f"[{self._analyzer}] Sending to ptd: {cmd!r}")
         self._proto.send(cmd)
         reply = self._proto.recv()
         if reply is None:
-            exit_with_error_msg("Got no reply from PTDaemon")
-        logging.info(f"Reply from ptd: {reply!r}")
+            exit_with_error_msg(f"[{self._analyzer}] Got no reply from PTDaemon")
+        logging.info(f"[{self._analyzer}] Reply from ptd: {reply!r}")
         self._messages.add(cmd, reply)
         return reply
 
@@ -501,7 +541,7 @@ class Ptd:
         # For range values, -1.0 indicates ?unknown?, >0 indicates actual value
         response = self.cmd("RR")
         if response is None or response == "":
-            logging.error("Can not get initial range")
+            logging.error(f"[{self._analyzer}] Can not get initial range")
             exit(1)
 
         response_list = response.split(",")
@@ -514,14 +554,14 @@ class Ptd:
                 ):
                     return response_list[param_num + 1]
             except (ValueError, IndexError):
-                logging.warning(f"Can not get ptd range value for {setting_name}")
+                logging.warning(f"[{self._analyzer}] Can not get ptd range value for {setting_name}")
                 return "Auto"
             return "Auto"
 
         self._init_Amps = get_range_from_ranges_list(1, "Amps")
         self._init_Volts = get_range_from_ranges_list(3, "Volts")
         logging.info(
-            f"Initial range for Amps is {self._init_Amps} for Volts is {self._init_Volts}"
+            f"[{self._analyzer}] Initial range for Amps is {self._init_Amps} for Volts is {self._init_Volts}"
         )
 
 
@@ -750,7 +790,10 @@ class Session:
         self.power_logs = os.path.join(self._server._config.out_dir, self._id, "power")
         os.mkdir(self.power_logs)
         self._ptd = Ptd(
-            server._config.ptd_command, server._config.ptd_port, self.power_logs
+            server._config.ptd_command, server._config.ptd_port, self.power_logs, 1
+        )
+        self._ptd2 = Ptd(
+            server._config.ptd_command2, server._config.ptd_port2, self.power_logs, 2
         )
 
         # State
@@ -769,14 +812,26 @@ class Session:
         if mode == Mode.RANGING and self._state == SessionState.INITIAL:
             self._server._summary.phase("ranging", 0)
             self._ptd.start()
+            self._ptd2.start()
             self._ptd.cmd("SR,V,Auto")
+            self._ptd2.cmd("SR,V,Auto")
             self._ptd.cmd("SR,A,Auto")
+            self._ptd2.cmd("SR,A,Auto")
             with common.sig:
                 time.sleep(ANALYZER_SLEEP_SECONDS)
-            logging.info("Starting ranging mode")
-            self._ptd.cmd(f"Go,1000,0,{self._id}_ranging")
-            self._go_command_time = time.monotonic()
 
+            logging.info("Starting ranging mode")
+            threads = []
+            ptd_thread_start1 = threading.Thread(target=self._ptd.cmd,args=([f"Go,1000,0,{self._id}_ranging"]))
+            threads.append(ptd_thread_start1)
+            ptd_thread_start2 = threading.Thread(target=self._ptd2.cmd,args=([f"Go,1000,0,{self._id}_ranging"]))
+            threads.append(ptd_thread_start2)
+            for x in threads:
+                x.start()
+            for x in threads:
+                x.join()
+
+            self._go_command_time = time.monotonic()
             self._state = SessionState.RANGING
 
             self._server._summary.phase("ranging", 1)
@@ -785,13 +840,24 @@ class Session:
         if mode == Mode.TESTING and self._state == SessionState.RANGING_DONE:
             self._server._summary.phase("testing", 0)
             self._ptd.start()
+            self._ptd2.start()
             self._ptd.cmd(f"SR,V,{self._maxVolts}")
+            self._ptd2.cmd(f"SR,V,{self._maxVolts}")
             self._ptd.cmd(f"SR,A,{self._maxAmps}")
+            self._ptd2.cmd(f"SR,A,{self._maxAmps}")
             with common.sig:
                 time.sleep(ANALYZER_SLEEP_SECONDS)
             logging.info("Starting testing mode")
-            self._ptd.cmd(f"Go,1000,0,{self._id}_testing")
 
+            threads = []
+            ptd_thread_start1 = threading.Thread(target=self._ptd.cmd,args=([f"Go,1000,0,{self._id}_testing"]))
+            threads.append(ptd_thread_start1)
+            ptd_thread_start2 = threading.Thread(target=self._ptd2.cmd,args=([f"Go,1000,0,{self._id}_testing"]))
+            threads.append(ptd_thread_start2)
+            for x in threads:
+                x.start()
+            for x in threads:
+                x.join()
             self._state = SessionState.TESTING
 
             self._server._summary.phase("testing", 1)
@@ -821,6 +887,7 @@ class Session:
         if mode == Mode.RANGING and self._state == SessionState.RANGING:
             self._state = SessionState.RANGING_DONE
             self._ptd.stop()
+            self._ptd2.stop()
             assert self._go_command_time is not None
             test_duration = time.monotonic() - self._go_command_time
             dirname = os.path.join(self.log_dir_path, "ranging")
@@ -828,6 +895,10 @@ class Session:
             with open(os.path.join(dirname, "spl.txt"), "w") as f:
                 f.write(
                     read_log(self._server._config.ptd_logfile, self._id + "_ranging")
+                )
+            with open(os.path.join(dirname, "spl2.txt"), "w") as f:
+                f.write(
+                    read_log(self._server._config.ptd_logfile2, self._id + "_ranging")
                 )
             try:
                 start_channel = 0
@@ -863,11 +934,16 @@ class Session:
         if mode == Mode.TESTING and self._state == SessionState.TESTING:
             self._state = SessionState.TESTING_DONE
             self._ptd.stop()
+            self._ptd2.stop()
             dirname = os.path.join(self.log_dir_path, "run_1")
             os.mkdir(dirname)
             with open(os.path.join(dirname, "spl.txt"), "w") as f:
                 f.write(
                     read_log(self._server._config.ptd_logfile, self._id + "_testing")
+                )
+            with open(os.path.join(dirname, "spl2.txt"), "w") as f:
+                f.write(
+                    read_log(self._server._config.ptd_logfile2, self._id + "_testing")
                 )
             self._server._summary.phase("testing", 3)
             return True
@@ -877,6 +953,7 @@ class Session:
 
     def drop(self) -> None:
         self._ptd.terminate()
+        self._ptd2.terminate()
         self._state = SessionState.DONE
 
 
