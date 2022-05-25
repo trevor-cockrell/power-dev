@@ -63,6 +63,7 @@ MULTICHANNEL_DEVICES = [48, 59, 61, 77]
 # https://github.com/mlcommons/power-dev/issues/220#issue-835336923
 DEVICE_TYPE_WT500 = 48
 
+MAX_PTD_COUNT = 10
 
 class MeasurementEndedTooFastError(Exception):
     pass
@@ -270,78 +271,62 @@ class ServerConfig:
         )
 
         self.analyzer_count: int = get("ptd", "analyzerCount", parse=int, fallback="1")
-
-        self.ptd_channel: Optional[List[int]] = get(
-            "analyzer1", "channel", parse=parse_channel, fallback=None
-        )
-        self.ptd_device_type: int = get("analyzer1", "deviceType", parse=int)
-        ptd_interface_flag: str = get("analyzer1", "interfaceFlag")
-        ptd_device_port: str = get("analyzer1", "devicePort")
-        ptd_board_num: Optional[int] = get("analyzer1", "gpibBoard", parse=int, fallback=None)
-        # TODO: validate ptd_interface_flag?
-        # TODO: validate ptd_device_type?
-        self.ptd_logfile: str = os.path.join(self.tmp_dir.name, "ptd_logfile.txt")
-        self.ptd_port: int = get("analyzer1", "networkPort", parse=int, fallback="8888")
-        self.ptd_command: List[str] = [
-            get("ptd", "ptd"),
-            "-l",
-            self.ptd_logfile,
-            "-p",
-            str(self.ptd_port),
-            *([] if ptd_board_num is None else ["-b", str(ptd_board_num)]),
-            *(
-                []
-                if self.ptd_channel is None
-                else ["-c", ",".join(str(x) for x in self.ptd_channel)]
-            ),
-            *([] if ptd_interface_flag == "" else [ptd_interface_flag]),
-            str(self.ptd_device_type),
-            ptd_device_port,
-        ]
-
-        self.ptd_summary: Dict[str, Any] = {
-            "command": self.ptd_command,
-            "device_type": self.ptd_device_type,
-            "interface_flag": ptd_interface_flag,
-            "device_port": ptd_device_port,
-            "channel": self.ptd_channel,
-        }
-
-        if self.analyzer_count > 1:
-            self.ptd_channel2: Optional[List[int]] = get(
-                "analyzer2", "channel", parse=parse_channel, fallback=None
+        # TODO: analyzer_count MAX_PTD_COUNT limit check?
+        if self.analyzer_count > MAX_PTD_COUNT:
+            logging.error(
+                f"{filename}: analyzerCount [{self.analyzer_count}] is greater than maximum supported limit [{MAX_PTD_COUNT}]"
             )
-            self.ptd_device_type2: int = get("analyzer2", "deviceType", parse=int)
-            ptd_interface_flag2: str = get("analyzer2", "interfaceFlag")
-            ptd_device_port2: str = get("analyzer2", "devicePort")
-            ptd_board_num2: Optional[int] = get("analyzer2", "gpibBoard", parse=int, fallback=None)
+            exit(1)
+
+        # generate empty lists of size analyzer_count to dynamically add parsed analyzer data
+        self.ptd_channel = [None] * self.analyzer_count
+        self.ptd_port = [None] * self.analyzer_count
+        self.ptd_device_type = [None] * self.analyzer_count
+        ptd_interface_flag = [None] * self.analyzer_count
+        ptd_device_port = [None] * self.analyzer_count
+        ptd_board_num = [None] * self.analyzer_count
+        self.ptd_logfile = [None] * self.analyzer_count
+        self.ptd_port = [None] * self.analyzer_count
+        self.ptd_command = [None] * self.analyzer_count
+        self.ptd_summary = [None] * self.analyzer_count
+
+        for a_idx in range(self.analyzer_count):
+            analyzer = f"analyzer{a_idx + 1}"
+
+            self.ptd_channel[a_idx]: Optional[List[int]] = get(
+                analyzer, "channel", parse=parse_channel, fallback=None
+            )
+            self.ptd_device_type[a_idx]: int = get(analyzer, "deviceType", parse=int)
+            ptd_interface_flag[a_idx]: str = get(analyzer, "interfaceFlag")
+            ptd_device_port[a_idx]: str = get(analyzer, "devicePort")
+            ptd_board_num[a_idx]: Optional[int] = get(analyzer, "gpibBoard", parse=int, fallback=None)
             # TODO: validate ptd_interface_flag?
             # TODO: validate ptd_device_type?
-            self.ptd_logfile2: str = os.path.join(self.tmp_dir.name, "ptd_logfile2.txt")
-            self.ptd_port2: int = get("analyzer2", "networkPort", parse=int, fallback="8888")
-            self.ptd_command2: List[str] = [
+            self.ptd_logfile[a_idx]: str = os.path.join(self.tmp_dir.name, f"ptd_logfile_{analyzer}.txt")
+            self.ptd_port[a_idx]: int = get(analyzer, "networkPort", parse=int, fallback=None)
+            self.ptd_command[a_idx]: List[str] = [
                 get("ptd", "ptd"),
                 "-l",
-                self.ptd_logfile2,
+                self.ptd_logfile[a_idx],
                 "-p",
-                str(self.ptd_port2),
-                *([] if ptd_board_num2 is None else ["-b", str(ptd_board_num2)]),
+                str(self.ptd_port[a_idx]),
+                *([] if ptd_board_num[a_idx] is None else ["-b", str(ptd_board_num[a_idx])]),
                 *(
                     []
-                    if self.ptd_channel2 is None
-                    else ["-c", ",".join(str(x) for x in self.ptd_channel2)]
+                    if self.ptd_channel[a_idx] is None
+                    else ["-c", ",".join(str(x) for x in self.ptd_channel[a_idx])]
                 ),
-                *([] if ptd_interface_flag2 == "" else [ptd_interface_flag2]),
-                str(self.ptd_device_type2),
-                ptd_device_port2,
+                *([] if ptd_interface_flag[a_idx] == "" else [ptd_interface_flag[a_idx]]),
+                str(self.ptd_device_type[a_idx]),
+                ptd_device_port[a_idx],
             ]
 
-            self.ptd_summary2: Dict[str, Any] = {
-                "command": self.ptd_command2,
-                "device_type": self.ptd_device_type2,
-                "interface_flag": ptd_interface_flag2,
-                "device_port": ptd_device_port2,
-                "channel": self.ptd_channel2,
+            self.ptd_summary[a_idx]: Dict[str, Any] = {
+                "command": self.ptd_command[a_idx],
+                "device_type": self.ptd_device_type[a_idx],
+                "interface_flag": ptd_interface_flag[a_idx],
+                "device_port": ptd_device_port[a_idx],
+                "channel": self.ptd_channel[a_idx],
             }
 
         for section, used_items in used.items():
@@ -362,33 +347,35 @@ class ServerConfig:
         self._check(filename)
 
     def _check(self, filename: str) -> None:
-        if tcp_port_is_occupied(self.ptd_port):
-            exit_with_error_msg(
-                f"The PTDaemon port {self.ptd_port} is already occupied."
-            )
 
-        if self.ptd_device_type in MULTICHANNEL_DEVICES:
-            if not self.ptd_channel:
+        for a_idx in range(self.analyzer_count):
+            if tcp_port_is_occupied(self.ptd_port[a_idx]):
                 exit_with_error_msg(
-                    f"{filename}: 'channel' value should be set for"
-                    f" a multichannel device {self.ptd_device_type}."
+                    f"The PTDaemon port {self.ptd_port[a_idx]} is already occupied."
                 )
-            if self.ptd_device_type == DEVICE_TYPE_WT500 and len(self.ptd_channel) != 1:
-                exit_with_error_msg(
-                    f"{filename}: 'channel' value should consist of one number"
-                    f" for a multichannel device {self.ptd_device_type} (Yokogawa WT500)."
-                )
-            if self.ptd_device_type != DEVICE_TYPE_WT500 and len(self.ptd_channel) != 2:
-                exit_with_error_msg(
-                    f"{filename}: 'channel' value should consist of two numbers"
-                    f" for a multichannel device {self.ptd_device_type}."
-                )
-        else:
-            if self.ptd_channel and len(self.ptd_channel) != 1:
-                exit_with_error_msg(
-                    f"{filename}: 'channel' value should consist of one number"
-                    f" or be disabled for a 1-channel device {self.ptd_device_type}."
-                )
+
+            if self.ptd_device_type[a_idx] in MULTICHANNEL_DEVICES:
+                if not self.ptd_channel[a_idx]:
+                    exit_with_error_msg(
+                        f"{filename}: 'channel' value should be set for"
+                        f" a multichannel device {self.ptd_device_type[a_idx]}."
+                    )
+                if self.ptd_device_type[a_idx] == DEVICE_TYPE_WT500 and len(self.ptd_channel[a_idx]) != 1:
+                    exit_with_error_msg(
+                        f"{filename}: 'channel' value should consist of one number"
+                        f" for a multichannel device {self.ptd_device_type[a_idx]} (Yokogawa WT500)."
+                    )
+                if self.ptd_device_type[a_idx] != DEVICE_TYPE_WT500 and len(self.ptd_channel[a_idx]) != 2:
+                    exit_with_error_msg(
+                        f"{filename}: 'channel' value should consist of two numbers"
+                        f" for a multichannel device {self.ptd_device_type[a_idx]}."
+                    )
+            else:
+                if self.ptd_channel[a_idx] and len(self.ptd_channel[a_idx]) != 1:
+                    exit_with_error_msg(
+                        f"{filename}: 'channel' value should consist of one number"
+                        f" or be disabled for a 1-channel device {self.ptd_device_type[a_idx]}."
+                    )
 
 
 class Ptd:
@@ -420,7 +407,7 @@ class Ptd:
             raise RuntimeError(f"[{self._analyzer}] The PTDaemon port {self._port} is already occupied")
         logging.info(f"[{self._analyzer}] Running PTDaemon: {self._command}")
 
-        self._tee = Tee(os.path.join(self._log_dir_path, "ptd_logs.txt"))
+        self._tee = Tee(os.path.join(self._log_dir_path, f"ptd_logs_analyzer{self._analyzer}.txt"))
         env = os.environ
         env["TZ"] = "UTC"
         if sys.platform == "win32":
@@ -577,7 +564,9 @@ class Server:
     def handle_connection(self, p: common.Proto) -> None:
         p.enable_keepalive()
         self._summary = summarylib.Summary()
-        self._summary.ptd_config = self._config.ptd_summary
+        self._summary.ptd_config = [None] * self._config.analyzer_count
+        for a_idx in range(self._config.analyzer_count):
+            self._summary.ptd_config[a_idx] = self._config.ptd_summary[a_idx]
         self._summary.debug = _debug
         self._last_session = self._last_session_dir_path = None
 
@@ -686,6 +675,7 @@ class Server:
 
             return "Error Unknown session command"
 
+        # TODO: post-process the new logfiles (*_analyzer#) into expected files in FETCH_FILES_LIST
         if (
             cmd[0] == "download"
             and cmd[1] == self._last_session
@@ -709,7 +699,9 @@ class Server:
 
         power_logs = self.session.power_logs
         log_dir_path = self.session.log_dir_path
-        ptd_messages = self.session._ptd._messages
+        # TODO: ptd_messages list
+        for _ptd in self.session._ptd:
+            ptd_messages = _ptd._messages
         session, self.session = self.session, None
         summary, self._summary = self._summary, None
 
@@ -789,12 +781,12 @@ class Session:
         os.mkdir(self.log_dir_path)
         self.power_logs = os.path.join(self._server._config.out_dir, self._id, "power")
         os.mkdir(self.power_logs)
-        self._ptd = Ptd(
-            server._config.ptd_command, server._config.ptd_port, self.power_logs, 1
-        )
-        self._ptd2 = Ptd(
-            server._config.ptd_command2, server._config.ptd_port2, self.power_logs, 2
-        )
+
+        self._ptd = [None] * server._config.analyzer_count
+        for a_idx in range(server._config.analyzer_count):
+            self._ptd[a_idx] = Ptd(
+                server._config.ptd_command[a_idx], server._config.ptd_port[a_idx], self.power_logs, a_idx + 1
+            )
 
         # State
         self._state = SessionState.INITIAL
@@ -811,21 +803,19 @@ class Session:
 
         if mode == Mode.RANGING and self._state == SessionState.INITIAL:
             self._server._summary.phase("ranging", 0)
-            self._ptd.start()
-            self._ptd2.start()
-            self._ptd.cmd("SR,V,Auto")
-            self._ptd2.cmd("SR,V,Auto")
-            self._ptd.cmd("SR,A,Auto")
-            self._ptd2.cmd("SR,A,Auto")
+            for _ptd in self._ptd:
+                _ptd.start()
+                _ptd.cmd("SR,V,Auto")
+                _ptd.cmd("SR,A,Auto")
+
             with common.sig:
                 time.sleep(ANALYZER_SLEEP_SECONDS)
 
             logging.info("Starting ranging mode")
             threads = []
-            ptd_thread_start1 = threading.Thread(target=self._ptd.cmd,args=([f"Go,1000,0,{self._id}_ranging"]))
-            threads.append(ptd_thread_start1)
-            ptd_thread_start2 = threading.Thread(target=self._ptd2.cmd,args=([f"Go,1000,0,{self._id}_ranging"]))
-            threads.append(ptd_thread_start2)
+            for _ptd in self._ptd:
+                ptd_thread = threading.Thread(target=_ptd.cmd,args=([f"Go,1000,0,{self._id}_ranging"]))
+                threads.append(ptd_thread)
             for x in threads:
                 x.start()
             for x in threads:
@@ -839,21 +829,19 @@ class Session:
 
         if mode == Mode.TESTING and self._state == SessionState.RANGING_DONE:
             self._server._summary.phase("testing", 0)
-            self._ptd.start()
-            self._ptd2.start()
-            self._ptd.cmd(f"SR,V,{self._maxVolts}")
-            self._ptd2.cmd(f"SR,V,{self._maxVolts}")
-            self._ptd.cmd(f"SR,A,{self._maxAmps}")
-            self._ptd2.cmd(f"SR,A,{self._maxAmps}")
+            for _ptd in self._ptd:
+                _ptd.start()
+                _ptd.cmd(f"SR,V,{self._maxVolts}")
+                _ptd.cmd(f"SR,A,{self._maxAmps}")
+
             with common.sig:
                 time.sleep(ANALYZER_SLEEP_SECONDS)
             logging.info("Starting testing mode")
 
             threads = []
-            ptd_thread_start1 = threading.Thread(target=self._ptd.cmd,args=([f"Go,1000,0,{self._id}_testing"]))
-            threads.append(ptd_thread_start1)
-            ptd_thread_start2 = threading.Thread(target=self._ptd2.cmd,args=([f"Go,1000,0,{self._id}_testing"]))
-            threads.append(ptd_thread_start2)
+            for _ptd in self._ptd:
+                ptd_thread = threading.Thread(target=_ptd.cmd,args=([f"Go,1000,0,{self._id}_testing"]))
+                threads.append(ptd_thread)
             for x in threads:
                 x.start()
             for x in threads:
@@ -886,20 +874,22 @@ class Session:
 
         if mode == Mode.RANGING and self._state == SessionState.RANGING:
             self._state = SessionState.RANGING_DONE
-            self._ptd.stop()
-            self._ptd2.stop()
+            for _ptd in self._ptd:
+                _ptd.stop()
+
             assert self._go_command_time is not None
             test_duration = time.monotonic() - self._go_command_time
             dirname = os.path.join(self.log_dir_path, "ranging")
             os.mkdir(dirname)
-            with open(os.path.join(dirname, "spl.txt"), "w") as f:
-                f.write(
-                    read_log(self._server._config.ptd_logfile, self._id + "_ranging")
-                )
-            with open(os.path.join(dirname, "spl2.txt"), "w") as f:
-                f.write(
-                    read_log(self._server._config.ptd_logfile2, self._id + "_ranging")
-                )
+
+            # TODO: Maybe can combine the temp logfiles into the spl.txt right here? avoid multiple spl_* files
+            for a_idx in range(server._config.analyzer_count):
+                with open(os.path.join(dirname, f"spl_analyzer{a_idx + 1}.txt"), "w") as f:
+                    f.write(
+                        read_log(self._server._config.ptd_logfile[a_idx], self._id + "_ranging")
+                    )
+
+            # TODO: Support multiple PTD with multi-channel analyzers
             try:
                 start_channel = 0
                 channels_amount = 0
@@ -931,6 +921,7 @@ class Session:
             self._server._summary.phase("ranging", 3)
             return True
 
+        # TODO: section
         if mode == Mode.TESTING and self._state == SessionState.TESTING:
             self._state = SessionState.TESTING_DONE
             self._ptd.stop()
@@ -952,8 +943,8 @@ class Session:
         return False
 
     def drop(self) -> None:
-        self._ptd.terminate()
-        self._ptd2.terminate()
+        for _ptd in self._ptd:
+            _ptd.terminate()
         self._state = SessionState.DONE
 
 
