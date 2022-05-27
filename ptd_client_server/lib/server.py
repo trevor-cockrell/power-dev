@@ -700,8 +700,11 @@ class Server:
         power_logs = self.session.power_logs
         log_dir_path = self.session.log_dir_path
         # TODO: ptd_messages list
+        ptd_messages = [None] * self._config.analyzer_count
+        a_idx = 0
         for _ptd in self.session._ptd:
-            ptd_messages = _ptd._messages
+            ptd_messages[a_idx] = _ptd._messages
+            a_idx += 1
         session, self.session = self.session, None
         summary, self._summary = self._summary, None
 
@@ -782,8 +785,9 @@ class Session:
         self.power_logs = os.path.join(self._server._config.out_dir, self._id, "power")
         os.mkdir(self.power_logs)
 
-        self._ptd = [None] * server._config.analyzer_count
-        for a_idx in range(server._config.analyzer_count):
+        self._analyzer_count = server._config.analyzer_count
+        self._ptd = [None] * self._analyzer_count
+        for a_idx in range(self._analyzer_count):
             self._ptd[a_idx] = Ptd(
                 server._config.ptd_command[a_idx], server._config.ptd_port[a_idx], self.power_logs, a_idx + 1
             )
@@ -883,59 +887,57 @@ class Session:
             os.mkdir(dirname)
 
             # TODO: Maybe can combine the temp logfiles into the spl.txt right here? avoid multiple spl_* files
-            for a_idx in range(server._config.analyzer_count):
+            for a_idx in range(self._analyzer_count):
                 with open(os.path.join(dirname, f"spl_analyzer{a_idx + 1}.txt"), "w") as f:
                     f.write(
                         read_log(self._server._config.ptd_logfile[a_idx], self._id + "_ranging")
                     )
 
-            # TODO: Support multiple PTD with multi-channel analyzers
-            try:
-                start_channel = 0
-                channels_amount = 0
+                # TODO: Support multiple PTD with multi-channel analyzers
+                try:
+                    start_channel = 0
+                    channels_amount = 0
 
-                if self._server._config.ptd_channel is not None:
-                    if self._server._config.ptd_device_type == DEVICE_TYPE_WT500:
-                        start_channel = 1
-                        channels_amount = self._server._config.ptd_channel[0]
+                    if self._server._config.ptd_channel[a_idx] is not None:
+                        if self._server._config.ptd_device_type[a_idx] == DEVICE_TYPE_WT500:
+                            start_channel = 1
+                            channels_amount = self._server._config.ptd_channel[a_idx][0]
+                        else:
+                            start_channel = self._server._config.ptd_channel[a_idx][0]
+                            if len(self._server._config.ptd_channel[a_idx]) == 2:
+                                channels_amount = self._server._config.ptd_channel[a_idx][1]
+
+                    self._maxVolts, self._maxAmps = max_volts_amps(
+                        self._server._config.ptd_logfile[a_idx],
+                        self._id + "_ranging",
+                        start_channel,
+                        channels_amount,
+                    )
+
+                except MaxVoltsAmpsNegativeValuesError as e:
+                    if test_duration < 1:
+                        raise MeasurementEndedTooFastError(
+                            f"the ranging measurement ended too fast (less than 1 second), no PTDaemon logs generated for {self._id!r}"
+                        ) from e
                     else:
-                        start_channel = self._server._config.ptd_channel[0]
-                        if len(self._server._config.ptd_channel) == 2:
-                            channels_amount = self._server._config.ptd_channel[1]
-
-                self._maxVolts, self._maxAmps = max_volts_amps(
-                    self._server._config.ptd_logfile,
-                    self._id + "_ranging",
-                    start_channel,
-                    channels_amount,
-                )
-
-            except MaxVoltsAmpsNegativeValuesError as e:
-                if test_duration < 1:
-                    raise MeasurementEndedTooFastError(
-                        f"the ranging measurement ended too fast (less than 1 second), no PTDaemon logs generated for {self._id!r}"
-                    ) from e
-                else:
-                    raise
+                        raise
             self._go_command_time = None
             self._server._summary.phase("ranging", 3)
             return True
 
-        # TODO: section
         if mode == Mode.TESTING and self._state == SessionState.TESTING:
             self._state = SessionState.TESTING_DONE
-            self._ptd.stop()
-            self._ptd2.stop()
+            for _ptd in self._ptd:
+                _ptd.stop()
+
             dirname = os.path.join(self.log_dir_path, "run_1")
             os.mkdir(dirname)
-            with open(os.path.join(dirname, "spl.txt"), "w") as f:
-                f.write(
-                    read_log(self._server._config.ptd_logfile, self._id + "_testing")
-                )
-            with open(os.path.join(dirname, "spl2.txt"), "w") as f:
-                f.write(
-                    read_log(self._server._config.ptd_logfile2, self._id + "_testing")
-                )
+            for a_idx in range(self._analyzer_count):
+                with open(os.path.join(dirname, f"spl_analyzer{a_idx+1}.txt"), "w") as f:
+                    f.write(
+                        read_log(self._server._config.ptd_logfile[a_idx], self._id + "_testing")
+                    )
+
             self._server._summary.phase("testing", 3)
             return True
 
